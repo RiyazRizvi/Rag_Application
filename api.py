@@ -1,68 +1,63 @@
-from utils import extract_file_content, get_text_chunks, get_vector_store
-from langchain_core.documents import Document
-from langchain.memory import ConversationBufferMemory
-from langchain.prompts import PromptTemplate
-from langchain.chains import ConversationalRetrievalChain
-from langchain_community.llms import Ollama
-from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
-import re
-import logging
+# api.py
+from fastapi import FastAPI, File, UploadFile
 from pymongo import MongoClient
+from langchain_community.vectorstores import FAISSVectorStore
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain.chains import ConversationalRetrievalChain
+from langchain.memory import ConversationBufferMemory
+from utils import extract_file_content, create_prompt
 
-# MongoDB connection
-client = MongoClient('mongodb://localhost:27017/')
-db = client['rag_app']
-faiss_collection = db['faiss_index']
+app = FastAPI()
 
-def handle_conversation(text: str) -> str:
-    """Handle conversational inputs that don't require document knowledge"""
-    # Implement your conversation handling logic here
+# Initialize MongoDB connection
+mongo_client = MongoClient('mongodb://localhost:27017')
+db = mongo_client['rag_app']
+vector_store_collection = db['vector_store']
 
-def handle_user_input(user_question: str):
-    """Handle user input with enhanced error handling, logging, and better conversation handling"""
-    # Implement your handle_user_input logic here
+# Initialize vector store and QA chain
+embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+vector_store = FAISSVectorStore.from_documents(
+    documents=[],
+    embedding=embeddings,
+    client=vector_store_collection
+)
+qa_chain = ConversationalRetrievalChain.from_llm(
+    llm=Ollama(model="llama3.1", temperature=0.1),
+    retriever=vector_store.as_retriever(
+        search_type="mmr",
+        search_kwargs={"k": 5, "fetch_k": 20}
+    ),
+    memory=ConversationBufferMemory(
+        memory_key="chat_history",
+        return_messages=True,
+        output_key='answer'
+    ),
+    combine_docs_chain_kwargs={
+        "prompt": create_prompt()
+    },
+    return_source_documents=True
+)
 
-def is_conversational_input(text: str) -> bool:
-    """Determine if the input is conversational rather than a question about documents"""
-    # Implement your conversational input detection logic here
+@app.post("/process_documents")
+async def process_documents(files: list[UploadFile] = File(...)):
+    text_chunks = []
+    metadata_chunks = []
+    for file in files:
+        text, docs = extract_file_content(file)
+        if text and docs:
+            text_chunks.extend(docs[0].page_content.split('\n'))
+            metadata_chunks.extend([docs[0].metadata] * len(docs[0].page_content.split('\n')))
 
-def create_qa_chain():
-    """Create the QA chain using the FAISS index stored in MongoDB"""
-    try:
-        prompt_template = """You are a polite, respectful, and efficient AI assistant."""
-        # Add more prompt template content here
+    if text_chunks:
+        vector_store.add_texts(text_chunks, metadatas=metadata_chunks)
+        return {"message": "Documents processed successfully!"}
+    else:
+        return {"message": "No text content could be extracted from the uploaded files."}
 
-        PROMPT = PromptTemplate(
-            template=prompt_template,
-            input_variables=["context", "question", "chat_history"]
-        )
-
-        llm = Ollama(model="llama3.1", temperature=0.1)
-
-        # Retrieve the FAISS index from MongoDB
-        faiss_index = FAISS.load_local("faiss_index", HuggingFaceEmbeddings(), allow_dangerous_deserialization=True)
-
-        retriever = faiss_index.as_retriever(
-            search_type="mmr",
-            search_kwargs={"k": 5, "fetch_k": 20}
-        )
-
-        qa_chain = ConversationalRetrievalChain.from_llm(
-            llm=llm,
-            retriever=retriever,
-            memory=st.session_state.memory,
-            combine_docs_chain_kwargs={"prompt": PROMPT},
-            return_source_documents=True
-        )
-
-        return qa_chain
-    except Exception as e:
-        logging.error(f"Error in create_qa_chain: {str(e)}", exc_info=True)
-        return None
-
-def clear_conversation():
-    """Clear only the conversation history without affecting processed documents"""
-    st.session_state.memory.clear()
-    st.session_state.conversation = []
-    st.success("Conversation cleared! You can continue asking questions about the processed documents.")
+@app.post("/ask_question")
+async def ask_question(question: str):
+    result = qa_chain({"question": question})
+    response = result.get('answer', '').strip()
+    if not response:
+        response = "I don't have enough information to answer this question."
+    return {"response": response}

@@ -1,3 +1,7 @@
+# utils.py
+import os
+import logging
+import re
 import pdfplumber
 import csv
 import pandas as pd
@@ -7,8 +11,6 @@ from PyPDF2 import PdfReader
 from pptx import Presentation
 from docx import Document as DocxDocument
 from pptx.enum.shapes import MSO_SHAPE_TYPE
-import re
-import streamlit as st
 from PIL import Image
 import pytesseract
 import cv2
@@ -16,126 +18,121 @@ import numpy as np
 import easyocr
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 import torch
-import logging
 
 # Initialize OCR components
 try:
     reader = easyocr.Reader(['en'])
     trocr_processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-handwritten')
     trocr_model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-handwritten')
-    
-    # Move models to GPU if available
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     trocr_model.to(device)
 except Exception as e:
     logging.error(f"Error initializing OCR components: {str(e)}")
-    st.error("Error initializing OCR components. Some image processing features may be limited.")
 
 def process_image(image_file):
-    """
-    Process image files and extract text using multiple OCR engines.
-    """
-    # Implement your process_image logic here
+    """Process image files and extract text using multiple OCR engines."""
+    # ... (existing image processing code)
 
 def extract_tables_from_image(gray_image):
-    """
-    Extract tables from images using OpenCV.
-    """
-    # Implement your extract_tables_from_image logic here
+    """Extract tables from images using OpenCV."""
+    # ... (existing table extraction code)
 
 def extract_formulas_from_image(gray_image):
-    """
-    Extract mathematical formulas from images.
-    """
-    # Implement your extract_formulas_from_image logic here
+    """Extract mathematical formulas from images."""
+    # ... (existing formula extraction code)
 
 def get_pdf_text(pdf_docs):
     """Extract text and tables from PDF documents."""
-    # Implement your get_pdf_text logic here
+    # ... (existing PDF processing code)
 
 def get_non_table_pdf_text(pdf_docs):
     """Extract non-tabular text from PDF documents."""
-    # Implement your get_non_table_pdf_text logic here
+    # ... (existing non-tabular PDF processing code)
 
 def get_csv_text(csv_file):
     """Extract text from CSV files."""
-    # Implement your get_csv_text logic here
+    # ... (existing CSV processing code)
 
 def get_excel_text(excel_files):
     """Extract text from Excel files."""
-    # Implement your get_excel_text logic here
+    # ... (existing Excel processing code)
 
 def get_ppt_text(ppt_files):
     """Extract text from PowerPoint files."""
-    # Implement your get_ppt_text logic here
+    # ... (existing PowerPoint processing code)
 
 def get_word_text(word_files):
     """Extract text from Word documents."""
-    # Implement your get_word_text logic here
+    # ... (existing Word document processing code)
 
-def init_session_state():
-    """Initialize session state variables"""
-    if 'memory' not in st.session_state:
-        st.session_state.memory = ConversationBufferMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            output_key='answer'
-        )
-    if 'conversation' not in st.session_state:
-        st.session_state.conversation = []
-    if 'user_context' not in st.session_state:
-        st.session_state.user_context = {}
-    if 'vector_store_path' not in st.session_state:
-        st.session_state.vector_store_path = "faiss_index"
-
-def process_documents(uploaded_files):
-    """
-    Process uploaded documents and create vector store
-    
-    Args:
-        uploaded_files: List of uploaded file objects
-        
-    Returns:
-        bool: True if processing successful, False otherwise
-    """
+def extract_file_content(uploaded_file):
+    """Extract text content from various file types."""
+    file_type = uploaded_file.name.split('.')[-1].lower()
     try:
-        all_text = ""
-        all_docs = []
-        
-        # Process each uploaded file
-        for uploaded_file in uploaded_files:
-            logging.info(f"Processing file: {uploaded_file.name}")
-            text, docs = extract_file_content(uploaded_file)
-            if text and docs:
-                all_text += text + "\n\n"
-                all_docs.extend(docs)
-        
-        if not all_text.strip():
-            logging.warning("No text content extracted from uploaded files")
-            return False
-            
-        # Create text chunks with metadata
-        text_chunks = []
-        metadata_chunks = []
-        
-        for doc in all_docs:
-            chunks, meta_chunks = get_text_chunks(doc.page_content, doc.metadata)
-            text_chunks.extend(chunks)
-            metadata_chunks.extend(meta_chunks)
-        
-        if not text_chunks:
-            logging.warning("No text chunks created from documents")
-            return False
-            
-        # Create and save vector store
-        vector_store = get_vector_store(text_chunks, metadata_chunks)
-        if vector_store is None:
-            logging.error("Failed to create vector store")
-            return False
-            
-        logging.info("Documents processed successfully")
-        return True
-        
+        if file_type in {'png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff'}:
+            return process_image(uploaded_file)
+        elif file_type == 'pdf':
+            return get_pdf_text([uploaded_file])
+        elif file_type == 'csv':
+            return get_csv_text(uploaded_file), [Document(page_content=get_csv_text(uploaded_file), metadata={'source': 'csv', 'filename': uploaded_file.name})]
+        elif file_type in {'xls', 'xlsx'}:
+            return get_excel_text([uploaded_file])
+        elif file_type in {'pptx'}:
+            return get_ppt_text([uploaded_file])
+        elif file_type in {'doc', 'docx'}:
+            return get_word_text([uploaded_file])
+        else:
+            error_msg = f"Unsupported file format: {file_type}"
+            logging.error(error_msg)
+            return "", []
     except Exception as e:
-        logging.error(f"Error in process_documents: {str(e)}", exc_info=True)
-        return False
+        error_msg = f"Error processing file {uploaded_file.name}: {str(e)}"
+        logging.error(error_msg)
+        return "", []
+
+def create_prompt():
+    """Create the prompt for the QA chain."""
+    prompt_template = """You are a polite, respectful, and efficient AI assistant.
+
+    IF the user's message matches ANY of these patterns:
+    - "Hi", "Hello", "Hey", "Hii", "Hola" (just greeting)
+    - "My name is [any name]"
+    - "I am [any name]"
+    - "[any greeting] my name is [any name]"
+    - "[any greeting] I am [any name]"
+    THEN respond only with: "Hello! How can I assist you today?"
+
+    OTHERWISE:
+    1. Use only the provided information:
+    - Context: {context}
+    - Chat History: {chat_history}
+    - Current Question: {question}
+
+    2. Your response must be:
+    - Direct and to-the-point
+    - Based only on given context and history
+    - Without any explanations about your capabilities
+    - Without mentioning sources or references
+
+    3. If the answer cannot be found in context or history:
+    Response should be only: "I don't have enough information to answer this question."
+
+    4. Never start responses with:
+    - "Based on..."
+    - "According to..."
+    - "I understand..."
+    - "Let me..."
+
+    5. Never end responses with:
+    - "Is there anything else..."
+    - "Let me know if..."
+    - "Feel free to..."
+
+    6. If the user uses any abusive or inappropriate language, respond politely and avoid escalation:
+    "I apologize, but I don't engage with that type of language. How else can I assist you today?"
+
+    Question: {question}"""
+    return PromptTemplate(
+        template=prompt_template,
+        input_variables=["context", "question", "chat_history"]
+    )
